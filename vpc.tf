@@ -1,6 +1,7 @@
 resource "aws_vpc" "vpc" {
-  cidr_block = var.vpc_cidr
-  enable_dns_hostnames = true
+  cidr_block                       = var.vpc_cidr
+  assign_generated_ipv6_cidr_block = true
+  enable_dns_hostnames             = true
   tags = {
     Name = "${var.prefix}-vpc"
   }
@@ -14,13 +15,15 @@ resource "aws_internet_gateway" "igw" {
 }
 
 resource "aws_subnet" "public" {
-  count                   = length(var.public_subnet_cidrs)
-  vpc_id                  = aws_vpc.vpc.id
-  cidr_block              = var.public_subnet_cidrs[count.index]
-  availability_zone       = var.availability_zones[count.index]
-  map_public_ip_on_launch = true
+  count                           = var.num_azs
+  vpc_id                          = aws_vpc.vpc.id
+  cidr_block                      = cidrsubnet(aws_vpc.vpc.cidr_block, 4, count.index)
+  map_public_ip_on_launch         = true
+  ipv6_cidr_block                 = cidrsubnet(aws_vpc.vpc.ipv6_cidr_block, 8, count.index)
+  assign_ipv6_address_on_creation = true
+  availability_zone               = data.aws_availability_zones.available.names[count.index]
   tags = {
-    Name = "${var.prefix}-${var.availability_zones[count.index]}-public-subnet"
+    Name = "${var.prefix}-${data.aws_availability_zones.available.names[count.index]}-public-subnet"
     type = "public"
   }
 }
@@ -31,78 +34,57 @@ resource "aws_route_table" "public" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
+  route {
+    ipv6_cidr_block = "::/0"
+    gateway_id      = aws_internet_gateway.igw.id
+  }
   tags = {
     Name = "${var.prefix}-public-route-table"
   }
 }
 
 resource "aws_route_table_association" "public" {
-  count          = length(var.public_subnet_cidrs)
+  count          = var.num_azs
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
 }
 
 resource "aws_subnet" "private" {
-  count             = length(var.private_subnet_cidrs)
+  count             = var.num_azs
   vpc_id            = aws_vpc.vpc.id
-  cidr_block        = var.private_subnet_cidrs[count.index]
-  availability_zone = var.availability_zones[count.index]
+  cidr_block        = cidrsubnet(aws_vpc.vpc.cidr_block, 4, count.index + 8)
+  ipv6_cidr_block   = cidrsubnet(aws_vpc.vpc.ipv6_cidr_block, 8, count.index + 128)
+  availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
-    Name = "${var.prefix}-${var.availability_zones[count.index]}-private-subnet"
+    Name = "${var.prefix}-${data.aws_availability_zones.available.names[count.index]}-private-subnet"
     type = "private"
   }
 }
 
-resource "aws_security_group" "nat" {
-  count  = length(var.private_subnet_cidrs)
-  name   = "${var.prefix}-nat${count.index}-sg"
+resource "aws_egress_only_internet_gateway" "eigw" {
   vpc_id = aws_vpc.vpc.id
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  ingress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = [aws_subnet.private[count.index].cidr_block]
-  }
   tags = {
-    Name = "${var.prefix}-nat${count.index}-sg"
-  }
-}
-
-resource "aws_instance" "nat" {
-  count                       = length(var.private_subnet_cidrs)
-  ami                         = data.aws_ami.fck_nat.id
-  availability_zone           = var.availability_zones[count.index]
-  instance_type               = "t4g.nano"
-  key_name                    = var.ssh_key_name
-  vpc_security_group_ids      = [aws_security_group.nat[count.index].id]
-  subnet_id                   = aws_subnet.public[count.index].id
-  associate_public_ip_address = true
-  source_dest_check           = false
-  tags = {
-    Name = "${var.prefix}-nat${count.index}"
+    Name = "${var.prefix}-egress-only-igw"
   }
 }
 
 resource "aws_route_table" "private" {
-  count  = length(var.private_subnet_cidrs)
+  count  = var.num_azs
   vpc_id = aws_vpc.vpc.id
-  route {
-    cidr_block           = "0.0.0.0/0"
-    network_interface_id = aws_instance.nat[count.index].primary_network_interface_id
-  }
   tags = {
     Name = "${var.prefix}-private-route-table"
   }
 }
 
+resource "aws_route" "private_ipv6_default" {
+  count                       = var.num_azs
+  route_table_id              = aws_route_table.private[count.index].id
+  destination_ipv6_cidr_block = "::/0"
+  egress_only_gateway_id      = aws_egress_only_internet_gateway.eigw.id
+}
+
 resource "aws_route_table_association" "private" {
-  count     = length(var.private_subnet_cidrs)
-  subnet_id = aws_subnet.private[count.index].id
+  count          = var.num_azs
+  subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private[count.index].id
 }

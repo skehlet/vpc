@@ -22,32 +22,17 @@ variable "vpc_cidr" {
   default = "10.64.0.0/16"
 }
 
-variable "availability_zones" {
-  type = list(string)
-  default = [
-    "us-west-2a",
-    "us-west-2b",
-    # "us-west-2c",
-    # "us-west-2d",
-  ]
+variable "num_azs" {
+  type = number
+  default = 2
 }
 
-variable "public_subnet_cidrs" {
-  type = list(string)
-  default = [
-    "10.64.0.0/20",
-    "10.64.16.0/20",
-    # "10.64.32.0/20",
-    # "10.64.48.0/20",
-  ]
+variable "launch_bastion" {
+  type = bool
+  default = false
 }
 
-variable "private_subnet_cidrs" {
-  type = list(string)
-  default = [
-    "10.64.128.0/20",
-    "10.64.144.0/20",
-    # "10.64.160.0/20",
-    # "10.64.176.0/20",
-  ]
+variable "launch_nat_instances" {
+  type = bool
+  default = true
 }
